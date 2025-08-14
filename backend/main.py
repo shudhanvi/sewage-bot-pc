@@ -29,7 +29,7 @@ database = Database(DATABASE_URL)
 # Define your table creation SQL query - Ensures all columns are present and correct types
 CREATE_OPERATIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS operations (
-    id SERIAL PRIMARY PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     device_id VARCHAR(255) NOT NULL,
     before_path VARCHAR(500) NOT NULL,
     after_path VARCHAR(500) NOT NULL,
@@ -215,13 +215,6 @@ async def get_data_by_device(device_id_filter: str):
     """Fetch all operations for a specific device_id"""
     query = "SELECT * FROM operations WHERE device_id = :device_id_filter ORDER BY timestamp DESC;"
     results = await database.fetch_all(query, values={"device_id_filter": device_id_filter})
-    return [dict(r) for r in results]
-
-@app.get("/api/data/location/{district_filter}")
-async def get_data_by_district(district_filter: str):
-    """Fetch all operations for a specific district"""
-    query = "SELECT * FROM operations WHERE district = :district_filter ORDER BY timestamp DESC;"
-    results = await database.fetch_all(query, values={"district_filter": district_filter})
     return [dict(r) for r in results]
 
 @app.get("/uploads/{filename}")
