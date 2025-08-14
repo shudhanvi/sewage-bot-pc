@@ -1,5 +1,3 @@
-
-
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,7 +29,7 @@ database = Database(DATABASE_URL)
 # Define your table creation SQL query - Ensures all columns are present and correct types
 CREATE_OPERATIONS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS operations (
-    id SERIAL PRIMARY KEY,
+    id SERIAL PRIMARY PRIMARY KEY,
     device_id VARCHAR(255) NOT NULL,
     before_path VARCHAR(500) NOT NULL,
     after_path VARCHAR(500) NOT NULL,
@@ -41,7 +39,11 @@ CREATE TABLE IF NOT EXISTS operations (
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     district VARCHAR(255),
     division VARCHAR(255),
-    area VARCHAR(255)
+    area VARCHAR(255),
+    -- NEW COLUMNS FOR OPERATION TIMES
+    operation_time_minutes NUMERIC,
+    operation_start_time TIMESTAMP WITH TIME ZONE,
+    operation_end_time TIMESTAMP WITH TIME ZONE
 );
 """
 # SQL to drop the table (for controlled resets)
@@ -110,7 +112,11 @@ async def upload_data(
     location: Optional[str] = Form(None),
     district: Optional[str] = Form(None),
     division: Optional[str] = Form(None),
-    area: Optional[str] = Form(None)
+    area: Optional[str] = Form(None),
+    # NEW PARAMETERS
+    operation_time: Optional[str] = Form(None),
+    start_time: Optional[str] = Form(None),
+    end_time: Optional[str] = Form(None)
 ):
     try:
         # Save 'before' image
@@ -136,6 +142,29 @@ async def upload_data(
                 logger.error(f"Failed to parse gas_data_raw JSON: {gas_data_raw}. Storing as NULL for gas_data column.")
                 # gas_data_parsed remains None, which will result in NULL for gas_data JSONB
 
+        # Parse operation_start_time and operation_end_time from ISO format strings
+        parsed_start_time = None
+        if start_time:
+            try:
+                # Assuming ISO format with timezone (e.g., "2025-08-14T17:35:26.000000+05:30")
+                parsed_start_time = datetime.datetime.fromisoformat(start_time)
+            except ValueError:
+                logger.error(f"Failed to parse start_time: {start_time}. Storing as NULL.")
+
+        parsed_end_time = None
+        if end_time:
+            try:
+                parsed_end_time = datetime.datetime.fromisoformat(end_time)
+            except ValueError:
+                logger.error(f"Failed to parse end_time: {end_time}. Storing as NULL.")
+        
+        parsed_operation_time = None
+        if operation_time:
+            try:
+                parsed_operation_time = float(operation_time)
+            except ValueError:
+                logger.error(f"Failed to parse operation_time: {operation_time}. Storing as NULL.")
+
         # Use UTC for consistency with TIMESTAMP WITH TIME ZONE
         current_timestamp = datetime.datetime.now(datetime.timezone.utc)
 
@@ -144,21 +173,25 @@ async def upload_data(
             "device_id": device_id,
             "before_path": f"uploads/{before_filename}",
             "after_path": f"uploads/{after_filename}",
-            #"gas_data": gas_data_parsed, 
             "gas_data": json.dumps(gas_data_parsed) if gas_data_parsed else None, # This is the Python dict (or None) for JSONB column
             "gas_data_raw": gas_data_raw, # This is the original JSON string (or None) for TEXT column
             "location": location,
             "timestamp": current_timestamp,
             "district": district,
             "division": division,
-            "area": area
+            "area": area,
+            "operation_time_minutes": parsed_operation_time,
+            "operation_start_time": parsed_start_time,
+            "operation_end_time": parsed_end_time
         }
 
         query = """
         INSERT INTO operations (
-            device_id, before_path, after_path, gas_data, gas_data_raw, location, timestamp, district, division, area
+            device_id, before_path, after_path, gas_data, gas_data_raw, location, timestamp, district, division, area,
+            operation_time_minutes, operation_start_time, operation_end_time
         ) VALUES (
-            :device_id, :before_path, :after_path, :gas_data, :gas_data_raw, :location, :timestamp, :district, :division, :area
+            :device_id, :before_path, :after_path, :gas_data, :gas_data_raw, :location, :timestamp, :district, :division, :area,
+            :operation_time_minutes, :operation_start_time, :operation_end_time
         );
         """
         await database.execute(query=query, values=values)
