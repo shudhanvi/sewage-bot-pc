@@ -51,12 +51,6 @@ DROP_OPERATIONS_TABLE_SQL = "DROP TABLE IF EXISTS operations;"
 
 app = FastAPI()
 
-# Mount static files for serving uploads
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
-
-
 # --- CORS Configuration ---
 origins = [
     "https://sewage-bot-poc-1.onrender.com",
@@ -78,7 +72,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# Mount static files for serving uploads
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @app.on_event("startup")
 async def startup():
