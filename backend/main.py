@@ -33,23 +33,25 @@ CREATE TABLE IF NOT EXISTS operations (
     device_id VARCHAR(255) NOT NULL,
     before_path VARCHAR(500) NOT NULL,
     after_path VARCHAR(500) NOT NULL,
-    gas_data JSONB,
     gas_data_raw TEXT,
+    gas_status VARCHAR(20),  -- Add this column for gas status
     location VARCHAR(255),
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     district VARCHAR(255),
     division VARCHAR(255),
-    area VARCHAR(255),
-    -- NEW COLUMNS FOR OPERATION TIMES
-    operation_time_minutes NUMERIC,
-    operation_start_time TIMESTAMP WITH TIME ZONE,
-    operation_end_time TIMESTAMP WITH TIME ZONE
+    area VARCHAR(255)
 );
 """
 # SQL to drop the table (for controlled resets)
 DROP_OPERATIONS_TABLE_SQL = "DROP TABLE IF EXISTS operations;"
 
 app = FastAPI()
+
+# Mount static files for serving uploads
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
 
 # --- CORS Configuration ---
 origins = [
@@ -59,8 +61,6 @@ origins = [
     "https://shudh-anvi.onrender.com",
     "https://www.shudh.anvi.co",
     "https://project-shudh.onrender.com",
-    "https://shudh-dashboard.onrender.com",
-    "https://shudh-anvi-main.onrender.com",
     "http://localhost:3000",
 ]
 
@@ -72,10 +72,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files for serving uploads
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
 
 @app.on_event("startup")
 async def startup():
@@ -107,15 +104,12 @@ async def upload_data(
     device_id: str = Form(...),
     before: UploadFile = File(...),
     after: UploadFile = File(...),
-    gas_data_raw: Optional[str] = Form(None), # This is the incoming JSON string
+    gas_data_raw: Optional[str] = Form(None),
+    gas_status: Optional[str] = Form(None),  # Add gas_status parameter
     location: Optional[str] = Form(None),
     district: Optional[str] = Form(None),
     division: Optional[str] = Form(None),
-    area: Optional[str] = Form(None),
-    # NEW PARAMETERS
-    operation_time: Optional[str] = Form(None),
-    start_time: Optional[str] = Form(None),
-    end_time: Optional[str] = Form(None)
+    area: Optional[str] = Form(None)
 ):
     try:
         # Save 'before' image
@@ -132,65 +126,30 @@ async def upload_data(
             buffer.write(await after.read())
         logger.info(f"Saved after image: {after_filename}")
 
-        # Parse gas_data_raw (JSON string) into a Python dict for gas_data JSONB column
-        gas_data_parsed = None
-        if gas_data_raw:
-            try:
-                gas_data_parsed = json.loads(gas_data_raw)
-            except json.JSONDecodeError:
-                logger.error(f"Failed to parse gas_data_raw JSON: {gas_data_raw}. Storing as NULL for gas_data column.")
-                # gas_data_parsed remains None, which will result in NULL for gas_data JSONB
-
-        # Parse operation_start_time and operation_end_time from ISO format strings
-        parsed_start_time = None
-        if start_time:
-            try:
-                # Assuming ISO format with timezone (e.g., "2025-08-14T17:35:26.000000+05:30")
-                parsed_start_time = datetime.datetime.fromisoformat(start_time)
-            except ValueError:
-                logger.error(f"Failed to parse start_time: {start_time}. Storing as NULL.")
-
-        parsed_end_time = None
-        if end_time:
-            try:
-                parsed_end_time = datetime.datetime.fromisoformat(end_time)
-            except ValueError:
-                logger.error(f"Failed to parse end_time: {end_time}. Storing as NULL.")
-        
-        parsed_operation_time = None
-        if operation_time:
-            try:
-                parsed_operation_time = float(operation_time)
-            except ValueError:
-                logger.error(f"Failed to parse operation_time: {operation_time}. Storing as NULL.")
-
         # Use UTC for consistency with TIMESTAMP WITH TIME ZONE
         current_timestamp = datetime.datetime.now(datetime.timezone.utc)
 
-        # Prepare values for database insertion
+        # Prepare values for database insertion with gas_status field
         values = {
             "device_id": device_id,
             "before_path": f"uploads/{before_filename}",
             "after_path": f"uploads/{after_filename}",
-            "gas_data": json.dumps(gas_data_parsed) if gas_data_parsed else None, # This is the Python dict (or None) for JSONB column
-            "gas_data_raw": gas_data_raw, # This is the original JSON string (or None) for TEXT column
+            "gas_data_raw": gas_data_raw,
+            "gas_status": gas_status,  # Add gas_status field
             "location": location,
             "timestamp": current_timestamp,
             "district": district,
             "division": division,
-            "area": area,
-            "operation_time_minutes": parsed_operation_time,
-            "operation_start_time": parsed_start_time,
-            "operation_end_time": parsed_end_time
+            "area": area
         }
 
         query = """
         INSERT INTO operations (
-            device_id, before_path, after_path, gas_data, gas_data_raw, location, timestamp, district, division, area,
-            operation_time_minutes, operation_start_time, operation_end_time
+            device_id, before_path, after_path, gas_data_raw, gas_status,
+            location, timestamp, district, division, area
         ) VALUES (
-            :device_id, :before_path, :after_path, :gas_data, :gas_data_raw, :location, :timestamp, :district, :division, :area,
-            :operation_time_minutes, :operation_start_time, :operation_end_time
+            :device_id, :before_path, :after_path, :gas_data_raw, :gas_status,
+            :location, :timestamp, :district, :division, :area
         );
         """
         await database.execute(query=query, values=values)
@@ -214,6 +173,13 @@ async def get_data_by_device(device_id_filter: str):
     """Fetch all operations for a specific device_id"""
     query = "SELECT * FROM operations WHERE device_id = :device_id_filter ORDER BY timestamp DESC;"
     results = await database.fetch_all(query, values={"device_id_filter": device_id_filter})
+    return [dict(r) for r in results]
+
+@app.get("/api/data/location/{district_filter}")
+async def get_data_by_district(district_filter: str):
+    """Fetch all operations for a specific district"""
+    query = "SELECT * FROM operations WHERE district = :district_filter ORDER BY timestamp DESC;"
+    results = await database.fetch_all(query, values={"district_filter": district_filter})
     return [dict(r) for r in results]
 
 @app.get("/uploads/{filename}")
