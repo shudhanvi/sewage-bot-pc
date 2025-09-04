@@ -62,6 +62,7 @@ origins = [
     "https://www.shudh.anvi.co",
     "https://project-shudh.onrender.com",
     "https://shudh-anvi-main.onrender.com",
+    "https://shudh.anvirobotics.com",
     "http://localhost:3000",
 ]
 
