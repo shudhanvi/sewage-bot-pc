@@ -64,6 +64,7 @@ origins = [
     "https://shudh-anvi-main.onrender.com",
     "https://shudh.anvirobotics.com",
     "http://localhost:3000",
+    "https://shudh-anvi-main-l6pz.onrender.com",  //New Frontend Render Link.
 ]
 
 app.add_middleware(
