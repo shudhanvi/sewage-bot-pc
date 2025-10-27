@@ -16,16 +16,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Database Configuration ---
-DATABASE_URL = "postgresql://shudhdb_latest_user:a0eikB9mSFIGbZWvHaAg8X8hLGxd4gqM@dpg-d3vhqsili9vc73crj52g-a.singapore-postgres.render.com/shudhdb_latest"
+# Add SSL parameters directly to the connection string
+DATABASE_URL = "postgresql://shudhdb_latest_user:a0eikB9mSFIGbZWvHaAg8X8hLGxd4gqM@dpg-d3vhqsili9vc73crj52g-a.singapore-postgres.render.com/shudhdb_latest?sslmode=require"
 
 # Parse database URL
 def parse_db_url(db_url):
     """Parse database URL into connection parameters"""
-    # Remove postgresql:// prefix
-    db_url = db_url.replace('postgresql://', '')
+    # Remove postgresql:// prefix and SSL parameters for parsing
+    clean_url = db_url.replace('postgresql://', '').split('?')[0]
     
     # Split user:password and host:port/database
-    user_pass, host_db = db_url.split('@')
+    user_pass, host_db = clean_url.split('@')
     user, password = user_pass.split(':')
     
     # Split host:port and database
@@ -41,7 +42,8 @@ def parse_db_url(db_url):
         'password': password,
         'host': host,
         'port': port,
-        'database': database
+        'database': database,
+        'ssl': 'require'
     }
 
 # Parse the database URL
@@ -53,8 +55,8 @@ ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
-# Global database connection
-db_connection = None
+# Global database connection pool
+db_pool = None
 
 app = FastAPI(title="SHUDH Backend API", version="1.0")
 
@@ -90,54 +92,60 @@ CREATE TABLE IF NOT EXISTS operations (
 """
 
 # --- Database Functions ---
-async def get_db_connection():
-    """Get database connection with SSL"""
-    global db_connection
-    if db_connection is None or db_connection.is_closed():
+async def get_db_pool():
+    """Get database connection pool with SSL"""
+    global db_pool
+    if db_pool is None:
         try:
-            db_connection = await asyncpg.connect(
+            db_pool = await asyncpg.create_pool(
                 user=db_params['user'],
                 password=db_params['password'],
                 database=db_params['database'],
                 host=db_params['host'],
                 port=db_params['port'],
-                ssl=ssl_context
+                ssl=ssl_context,
+                min_size=1,
+                max_size=10,
+                command_timeout=60
             )
-            logger.info("✅ Database connected with SSL")
+            logger.info("✅ Database connection pool created with SSL")
         except Exception as e:
-            logger.error(f"❌ Database connection failed: {e}")
+            logger.error(f"❌ Database connection pool creation failed: {e}")
             raise e
-    return db_connection
+    return db_pool
 
 async def execute_query(query, *args):
     """Execute a database query"""
-    conn = await get_db_connection()
-    try:
-        result = await conn.execute(query, *args)
-        return result
-    except Exception as e:
-        logger.error(f"❌ Query execution failed: {e}")
-        raise e
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        try:
+            result = await conn.execute(query, *args)
+            return result
+        except Exception as e:
+            logger.error(f"❌ Query execution failed: {e}")
+            raise e
 
 async def fetch_query(query, *args):
     """Fetch data from database"""
-    conn = await get_db_connection()
-    try:
-        result = await conn.fetch(query, *args)
-        return result
-    except Exception as e:
-        logger.error(f"❌ Fetch query failed: {e}")
-        raise e
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        try:
+            result = await conn.fetch(query, *args)
+            return result
+        except Exception as e:
+            logger.error(f"❌ Fetch query failed: {e}")
+            raise e
 
 async def fetch_one(query, *args):
     """Fetch one row from database"""
-    conn = await get_db_connection()
-    try:
-        result = await conn.fetchrow(query, *args)
-        return result
-    except Exception as e:
-        logger.error(f"❌ Fetch one failed: {e}")
-        raise e
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        try:
+            result = await conn.fetchrow(query, *args)
+            return result
+        except Exception as e:
+            logger.error(f"❌ Fetch one failed: {e}")
+            raise e
 
 # --- Application Events ---
 @app.on_event("startup")
@@ -146,21 +154,23 @@ async def startup():
     logger.info("🚀 Starting SHUDH Backend API with SSL...")
     
     try:
-        # Connect to database
-        conn = await get_db_connection()
-        logger.info("✅ Database connection established")
+        # Create connection pool
+        pool = await get_db_pool()
+        logger.info("✅ Database connection pool established")
         
-        # Create operations table
-        await execute_query(CREATE_OPERATIONS_TABLE_SQL)
-        logger.info("✅ Operations table created/verified")
-        
-        # Test the connection
-        test_result = await fetch_one("SELECT 1 as test_value, NOW() as current_time")
-        logger.info(f"✅ Database test successful: {test_result['test_value']}")
-        
-        # Check table count
-        count_result = await fetch_one("SELECT COUNT(*) as count FROM operations")
-        logger.info(f"📊 Operations table has {count_result['count']} records")
+        # Test connection
+        async with pool.acquire() as conn:
+            # Create operations table
+            await conn.execute(CREATE_OPERATIONS_TABLE_SQL)
+            logger.info("✅ Operations table created/verified")
+            
+            # Test the connection
+            test_result = await conn.fetchrow("SELECT 1 as test_value, NOW() as current_time")
+            logger.info(f"✅ Database test successful: {test_result['test_value']}")
+            
+            # Check table count
+            count_result = await conn.fetchrow("SELECT COUNT(*) as count FROM operations")
+            logger.info(f"📊 Operations table has {count_result['count']} records")
         
         logger.info("🎉 Application startup completed successfully!")
         
@@ -172,10 +182,10 @@ async def startup():
 async def shutdown():
     """Clean up database connections"""
     logger.info("🛑 Shutting down application...")
-    global db_connection
-    if db_connection and not db_connection.is_closed():
-        await db_connection.close()
-        logger.info("✅ Database disconnected")
+    global db_pool
+    if db_pool:
+        await db_pool.close()
+        logger.info("✅ Database pool closed")
 
 # --- API Routes ---
 @app.get("/")
@@ -264,6 +274,18 @@ async def upload_operation_data(
             latitude, longitude, duration_seconds, area, division, district,
             start_time, end_time, operation_status, gas_status
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'completed', 'normal')
+        ON CONFLICT (operation_id) DO UPDATE SET
+            before_image_url = EXCLUDED.before_image_url,
+            after_image_url = EXCLUDED.after_image_url,
+            latitude = EXCLUDED.latitude,
+            longitude = EXCLUDED.longitude,
+            duration_seconds = EXCLUDED.duration_seconds,
+            area = EXCLUDED.area,
+            division = EXCLUDED.division,
+            district = EXCLUDED.district,
+            start_time = EXCLUDED.start_time,
+            end_time = EXCLUDED.end_time,
+            operation_status = EXCLUDED.operation_status
         """
         
         # Execute the insert with parameters
