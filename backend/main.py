@@ -16,17 +16,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Database Configuration ---
-# Add SSL parameters directly to the connection string
-DATABASE_URL = "postgresql://shudhdb_latest_user:a0eikB9mSFIGbZWvHaAg8X8hLGxd4gqM@dpg-d3vhqsili9vc73crj52g-a.singapore-postgres.render.com/shudhdb_latest?sslmode=require"
+DATABASE_URL = "postgresql://shudhdb_latest_user:a0eikB9mSFIGbZWvHaAg8X8hLGxd4gqM@dpg-d3vhqsili9vc73crj52g-a.singapore-postgres.render.com/shudhdb_latest"
 
 # Parse database URL
 def parse_db_url(db_url):
     """Parse database URL into connection parameters"""
-    # Remove postgresql:// prefix and SSL parameters for parsing
-    clean_url = db_url.replace('postgresql://', '').split('?')[0]
+    # Remove postgresql:// prefix
+    db_url = db_url.replace('postgresql://', '')
     
     # Split user:password and host:port/database
-    user_pass, host_db = clean_url.split('@')
+    user_pass, host_db = db_url.split('@')
     user, password = user_pass.split(':')
     
     # Split host:port and database
@@ -42,8 +41,7 @@ def parse_db_url(db_url):
         'password': password,
         'host': host,
         'port': port,
-        'database': database,
-        'ssl': 'require'
+        'database': database
     }
 
 # Parse the database URL
